@@ -102,26 +102,26 @@ Migrations run once and record their filenames in `migrations`. Seed data is ins
 
 ## Environment variables
 
-| Variable                              | Purpose                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------ |
-| DATABASE_URL                          | PostgreSQL connection string                                                   |
-| DB_MODE                               | `postgres` for production; `embedded` for the local demo                       |
-| DB_PATH                               | Optional embedded database path for development/testing                        |
-| DB_SSL                                | Set `true` if the PostgreSQL server requires verified TLS                      |
-| JWT_SECRET                            | Random secret of at least 32 characters                                        |
-| PORT                                  | Backend listening port, defaults to 5000                                       |
-| FRONTEND_URL                          | Exact trusted frontend origin; supports a comma-separated allowlist            |
-| PUBLIC_URL                            | Canonical public store origin used by sitemap/robots                           |
-| COOKIE_SECURE                         | `true` for HTTPS production; `false` only for local HTTP                       |
-| TRUST_PROXY                           | `true` only behind a trusted single reverse proxy                              |
-| VITE_API_URL                          | Optional frontend API origin; leave empty with same-origin proxy routing       |
-| SEED_ADMIN_PASSWORD                   | Admin seed password; never ship demo credentials to production                 |
-| SEED_CUSTOMER_PASSWORD                | Customer seed password                                                         |
-| SMTP_HOST / SMTP_PORT                 | SMTP host and port                                                             |
-| SMTP_USER / SMTP_PASSWORD / SMTP_FROM | Server-side email configuration                                                |
-| RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET | Reserved for a future gateway adapter                                          |
-| UPLOAD_URL                            | Reserved for a future external storage adapter; current uploads use `/uploads` |
-| POSTGRES_PASSWORD                     | PostgreSQL password used by Docker Compose                                     |
+| Variable                                                           | Purpose                                                                  |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| DATABASE_URL                                                       | PostgreSQL connection string                                             |
+| DB_MODE                                                            | `postgres` for production; `embedded` for the local demo                 |
+| DB_PATH                                                            | Optional embedded database path for development/testing                  |
+| DB_SSL                                                             | Set `true` if the PostgreSQL server requires verified TLS                |
+| JWT_SECRET                                                         | Random secret of at least 32 characters                                  |
+| PORT                                                               | Backend listening port, defaults to 5000                                 |
+| FRONTEND_URL                                                       | Exact trusted frontend origin; supports a comma-separated allowlist      |
+| PUBLIC_URL                                                         | Canonical public store origin used by sitemap/robots                     |
+| COOKIE_SECURE                                                      | `true` for HTTPS production; `false` only for local HTTP                 |
+| TRUST_PROXY                                                        | `true` only behind a trusted single reverse proxy                        |
+| VITE_API_URL                                                       | Optional frontend API origin; leave empty with same-origin proxy routing |
+| SEED_ADMIN_PASSWORD                                                | Admin seed password; never ship demo credentials to production           |
+| SEED_CUSTOMER_PASSWORD                                             | Customer seed password                                                   |
+| SMTP_HOST / SMTP_PORT                                              | SMTP host and port                                                       |
+| SMTP_USER / SMTP_PASSWORD / SMTP_FROM                              | Server-side email configuration                                          |
+| RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET                              | Reserved for a future gateway adapter                                    |
+| SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / SUPABASE_STORAGE_BUCKET | Production image storage configuration; key is server-only               |
+| POSTGRES_PASSWORD                                                  | PostgreSQL password used by Docker Compose                               |
 
 The application reads root `.env` in both development and compiled backend builds. Hosting environment variables take precedence. Never commit `.env`, database files or credentials.
 
@@ -210,40 +210,51 @@ Password recovery sends through Nodemailer when SMTP is configured. Without SMTP
 
 Online payments are visibly disabled, and the backend rejects ONLINE orders. `backend/src/services/payments.ts` provides the provider interface. Adding keys alone does not enable a gateway: implement order/payment creation, webhook signature verification, idempotent payment-event processing and reconciliation before enabling online payment.
 
-Uploads accept JPG, PNG and WebP up to 5 MB per image, at most ten at a time. Sharp validates the decoded content, limits pixel count, removes metadata, resizes and writes WebP. Uploads are stored under `backend/uploads` and require durable storage in production. For multiple backend instances, replace this with shared object storage. Authentication is required; quotas and content moderation should be added for a public review-image service.
+Uploads accept JPG, PNG and WebP up to 3 MB per request. Sharp validates decoded content, limits pixel count, removes metadata and converts to WebP. Production images are stored in Supabase Storage. Authentication is required.
 
-## Deployment
+## Deployment: GitHub + Vercel + Supabase
 
-### Single-origin Express hosting: recommended
+Vercel serves the React website and Express API together. Supabase supplies PostgreSQL and public image storage. Existing account authentication remains in Express; Supabase Auth is not required.
 
-Serve the compiled frontend through Express so session cookies and APIs share one origin. This repository includes `Dockerfile`, `docker-compose.yml` and a Render blueprint.
+1. Create a Supabase project. In Connect, copy the **transaction pooler** connection string (port 6543) and replace its password placeholder. The backend uses unnamed parameterized pg queries, compatible with transaction pooling.
+2. In Supabase Storage, create a **public** bucket named `nest-images`. Images are publicly readable; writes go through the authenticated backend using the server-only service role key. Do not add public upload policies.
+3. Copy `.env.example` to `.env` locally. Set `DB_MODE=postgres`, `DATABASE_URL` to the pooler string, `DB_SSL=true`, and the Supabase URL/service role key. If certificate verification requires the project CA, set `DB_SSL_CA` to the Supabase CA certificate using literal `\n` line separators. Keep secrets out of Git and never use a `VITE_` prefix for server secrets.
+4. Run `npm ci`, then `npm run db:migrate`. Migration 002 enables row-level security with no public Data API policies on application tables. Use the project postgres database owner for backend connections.
+5. For a new database only, set your own strong `SEED_ADMIN_PASSWORD` and `SEED_CUSTOMER_PASSWORD`, then run `npm run db:seed` once. Seeding creates sample products and accounts; do not reseed a live store.
+6. Push the entire project to your GitHub repository. Import it into Vercel, with the repository root as Root Directory (the directory containing `vercel.json`). The supplied configuration builds both workspaces, publishes `frontend/dist`, and runs `api/index.ts` as the API function. Use Node.js 24.
+7. Add the production environment variables below in Vercel. Deploy, then set the exact final HTTPS URL as `FRONTEND_URL` and `PUBLIC_URL` and redeploy. Keep `VITE_API_URL` unset: website and API share one origin.
+8. Check `/api/health`, login, catalog, checkout, an admin upload, and a page refresh on `/products`. Confirm the uploaded image appears in your Supabase bucket.
 
-1. Provision PostgreSQL and durable upload storage.
-2. Set production environment values, including a fresh JWT secret and `COOKIE_SECURE=true`.
-3. Set `FRONTEND_URL` and `PUBLIC_URL` to the actual HTTPS store URL.
-4. Build with `npm ci && npm run build`.
-5. Run `node scripts/migrate.mjs` once in the release phase.
-6. Start with `node backend/dist/server.js` (or `npm run start`).
+| Vercel variable           | Value                                            |
+| ------------------------- | ------------------------------------------------ |
+| NODE_ENV                  | `production`                                     |
+| DB_MODE                   | `postgres`                                       |
+| DATABASE_URL              | Supabase transaction pooler URL                  |
+| DB_SSL                    | `true`                                           |
+| DB_SSL_CA                 | Supabase CA certificate if needed                |
+| JWT_SECRET                | Fresh random secret, at least 32 characters      |
+| FRONTEND_URL              | Exact production HTTPS origin, no trailing slash |
+| PUBLIC_URL                | Same production HTTPS origin                     |
+| COOKIE_SECURE             | `true`                                           |
+| TRUST_PROXY               | `true`                                           |
+| SUPABASE_URL              | `https://YOUR-PROJECT.supabase.co`               |
+| SUPABASE_SERVICE_ROLE_KEY | Server-only service role key                     |
+| SUPABASE_STORAGE_BUCKET   | `nest-images`                                    |
 
-On Render, review `render.yaml` and supply the actual public origin. A persistent disk may require a paid service. The blueprint is supplied but has not been deployed to a user hosting account.
+Optional SMTP variables enable password-reset email. Without SMTP, production password reset is unavailable. Do not add seed passwords to Vercel; migration and seeding are explicit local operations, not part of every deployment. Preview deployments should use a separate Supabase project and their own exact trusted origin. The current request limiters are per function instance and are not a global abuse limit; configure an additional platform limit before a public launch.
 
-Railway can build the Dockerfile or run the same build/release/start commands. Add PostgreSQL, set DATABASE_URL, mount a volume at `/app/backend/uploads` for Docker, and supply the public origin. On AWS, use the image on a service such as ECS and a PostgreSQL database such as RDS; add HTTPS and persistent/shared image storage.
+Uploads are sent one image per request, up to 3 MB, to fit Vercel request limits. The interface still supports choosing multiple images. Production uploads use Supabase Storage; local development can use `backend/uploads`. Existing local upload files must be copied into the bucket and their database URLs updated separately. This package does not transfer an existing deployed database or delete services in your hosting accounts.
 
-### Vercel / Netlify frontend with separate API
+### GitHub repository error
 
-Copy the relevant example from `deploy/` to root `vercel.json` or `netlify.toml`. Replace every `YOUR-BACKEND-HOST` with the actual Express backend host. Build from the repository root, output `frontend/dist`, and proxy `/api`, `/uploads`, `/sitemap.xml` and `/robots.txt` to the API host. Keep VITE_API_URL empty. Set the backend trusted FRONTEND_URL to the frontend HTTPS origin.
-
-The same-origin proxy is intentional: arbitrary Vercel/Render origins with direct cross-site cookies are not supported by the default SameSite=Lax session policy. Verify your provider forwards cookies and Set-Cookie headers. SPA routes must rewrite to index.html; static catalog files must be served normally.
-
-### Docker locally
-
-Create `.env` with POSTGRES_PASSWORD and a random JWT_SECRET, then run:
+If `git push` says repository not found, create `nest_ecom` under your actual GitHub account first and copy its HTTPS URL. Then run:
 
 ```bash
-docker compose up --build
+git remote set-url origin https://github.com/YOUR-USERNAME/nest_ecom.git
+git push -u origin main
 ```
 
-Open http://localhost:5000. The container migrates PostgreSQL on start but does not seed demo credentials into production. Create initial users through a controlled one-time seed/release procedure with your own seed passwords. Never reuse the local demo passwords for a public service.
+If the repository is private, authenticate Git with an account that has access. A remote URL alone does not create the repository.
 
 ## Validation performed
 

@@ -7,7 +7,7 @@ import { rateLimit } from "express-rate-limit";
 import multer from "multer";
 import sharp from "sharp";
 import { randomBytes } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ZodError } from "zod";
 import { authRoutes } from "./routes/auth.js";
@@ -77,25 +77,52 @@ app.use("/api", catalogRoutes);
 app.use("/api/admin", adminRoutes);
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 3 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) =>
     cb(null, ["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)),
 });
 // Authenticate uploads independently; customer uploads support verified review images.
-app.post("/api/uploads", auth, upload.array("images", 10), async (req, res) => {
+app.post("/api/uploads", auth, upload.array("images", 1), async (req, res) => {
   const files = req.files as Express.Multer.File[];
   if (!files?.length)
-    throw new HttpError(400, "Choose JPG, PNG or WebP images up to 5 MB.");
-  const dir = resolve(ROOT, "backend/uploads");
-  await mkdir(dir, { recursive: true });
-  const urls = [];
+    throw new HttpError(400, "Choose JPG, PNG or WebP images up to 3 MB.");
+  const urls: string[] = [];
   for (const file of files) {
     const name = randomBytes(20).toString("hex") + ".webp";
-    await sharp(file.buffer, { limitInputPixels: 16000000 })
+    const image = await sharp(file.buffer, { limitInputPixels: 16000000 })
       .resize({ width: 1600, withoutEnlargement: true })
       .webp({ quality: 85 })
-      .toFile(resolve(dir, name));
-    urls.push("/uploads/" + name);
+      .toBuffer();
+    const storageUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    const storageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET || "nest-images";
+    if (storageUrl && storageKey) {
+      const path = encodeURIComponent(bucket) + "/" + name;
+      const result = await fetch(storageUrl + "/storage/v1/object/" + path, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + storageKey,
+          apikey: storageKey,
+          "Content-Type": "image/webp",
+          "Cache-Control": "max-age=2592000",
+        },
+        body: new Uint8Array(image),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!result.ok)
+        throw new HttpError(
+          502,
+          "Image storage is unavailable. Check the configured bucket.",
+        );
+      urls.push(storageUrl + "/storage/v1/object/public/" + path);
+    } else {
+      if (process.env.NODE_ENV === "production")
+        throw new HttpError(503, "Image storage has not been configured.");
+      const dir = resolve(ROOT, "backend/uploads");
+      await mkdir(dir, { recursive: true });
+      await writeFile(resolve(dir, name), image);
+      urls.push("/uploads/" + name);
+    }
   }
   res.status(201).json({ urls });
 });
@@ -154,16 +181,14 @@ app.use(
     _next: express.NextFunction,
   ) => {
     if (err instanceof ZodError)
-      return res
-        .status(400)
-        .json({
-          message: err.issues
-            .map(
-              (i) =>
-                (i.path.join(".") ? i.path.join(".") + ": " : "") + i.message,
-            )
-            .join("; "),
-        });
+      return res.status(400).json({
+        message: err.issues
+          .map(
+            (i) =>
+              (i.path.join(".") ? i.path.join(".") + ": " : "") + i.message,
+          )
+          .join("; "),
+      });
     if (err instanceof HttpError)
       return res.status(err.status).json({ message: err.message });
     if (err.code === "23505")
@@ -171,18 +196,14 @@ app.use(
         .status(409)
         .json({ message: "That email, SKU, slug or record already exists." });
     if (err.code === "23503")
-      return res
-        .status(409)
-        .json({
-          message:
-            "This record is linked to other records. Archive it or update the related records first.",
-        });
+      return res.status(409).json({
+        message:
+          "This record is linked to other records. Archive it or update the related records first.",
+      });
     if (err instanceof multer.MulterError)
-      return res
-        .status(400)
-        .json({
-          message: "Upload limit exceeded. Use images smaller than 5 MB.",
-        });
+      return res.status(400).json({
+        message: "Upload limit exceeded. Use images smaller than 3 MB.",
+      });
     if (err.type === "entity.parse.failed")
       return res.status(400).json({ message: "Invalid JSON request." });
     console.error(err);

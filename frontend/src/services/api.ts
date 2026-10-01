@@ -21,11 +21,9 @@ export async function api<T = any>(
       ...options.headers,
     },
   });
-  const body = await res
-    .json()
-    .catch(() => ({
-      message: "The service is unavailable. Please try again.",
-    }));
+  const body = await res.json().catch(() => ({
+    message: "The service is unavailable. Please try again.",
+  }));
   if (!res.ok)
     throw new APIError(body.message || "Something went wrong.", res.status);
   return body;
@@ -48,3 +46,20 @@ export const date = (s: string) =>
   });
 export const message = (e: unknown) =>
   e instanceof Error ? e.message : "Something went wrong. Please try again.";
+
+export async function uploadImages(files: File[]): Promise<{ urls: string[] }> {
+  if (files.length > 10) throw new Error("Choose up to ten images.");
+  if (files.some((file) => file.size > 3 * 1024 * 1024))
+    throw new Error("Use images smaller than 3 MB.");
+  const urls: string[] = [];
+  for (const file of files) {
+    const body = new FormData();
+    body.append("images", file);
+    const uploaded = await api<{ urls: string[] }>("/uploads", {
+      method: "POST",
+      body,
+    });
+    urls.push(...uploaded.urls);
+  }
+  return { urls };
+}
