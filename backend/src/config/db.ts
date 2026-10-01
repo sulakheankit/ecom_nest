@@ -25,9 +25,17 @@ const pool = embedded
   ? null
   : new pg.Pool({
       connectionString: process.env.DATABASE_URL,
+      max: 3,
+      idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: 10000,
       ssl:
         process.env.DB_SSL === "true"
-          ? { rejectUnauthorized: true }
+          ? {
+              rejectUnauthorized: true,
+              ...(process.env.DB_SSL_CA
+                ? { ca: process.env.DB_SSL_CA.replace(/\\n/g, "\n") }
+                : {}),
+            }
           : undefined,
     });
 export const db: DB = {

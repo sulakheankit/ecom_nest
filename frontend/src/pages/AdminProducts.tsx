@@ -4,6 +4,7 @@ import { Plus, PenLine, Trash2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useData } from "../hooks/useData";
 import { api, send, currency, asset, message } from "../services/api";
+import { uploadImages } from "../services/api";
 import type { Product, Category } from "../types";
 import {
   Modal,
@@ -507,13 +508,10 @@ function ProductForm({
           multiple
           accept="image/png,image/jpeg,image/webp"
           onChange={async (e) => {
-            const fd = new FormData();
-            Array.from(e.target.files || []).forEach((f) =>
-              fd.append("images", f),
-            );
+            const files = Array.from(e.target.files || []);
             setBusy(true);
             try {
-              const r = await api("/uploads", { method: "POST", body: fd });
+              const r = await uploadImages(files);
               field("images", [...form.images, ...r.urls]);
             } catch (e) {
               toast.error(message(e));

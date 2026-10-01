@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { useData } from "../hooks/useData";
 import { useStore } from "../store/Store";
 import { asset, currency, send, message, api, date } from "../services/api";
+import { uploadImages } from "../services/api";
 import type { Product as ProductType, Variant } from "../types";
 import {
   Rating,
@@ -438,13 +439,8 @@ export function Product() {
                           const files = Array.from(e.target.files || []);
                           if (files.length > 4)
                             return toast.error("Choose up to four images.");
-                          const form = new FormData();
-                          files.forEach((f) => form.append("images", f));
                           try {
-                            const r = await api("/uploads", {
-                              method: "POST",
-                              body: form,
-                            });
+                            const r = await uploadImages(files);
                             setReview({ ...review, images: r.urls });
                             toast.success("Photos uploaded.");
                           } catch (err) {

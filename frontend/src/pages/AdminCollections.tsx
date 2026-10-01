@@ -3,6 +3,7 @@ import { Plus, PenLine, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useData } from "../hooks/useData";
 import { api, send, asset, currency, date, message } from "../services/api";
+import { uploadImages } from "../services/api";
 import {
   Modal,
   Confirm,
@@ -364,10 +365,9 @@ function CollectionForm({
               type="file"
               accept="image/png,image/jpeg,image/webp"
               onChange={async (e) => {
-                const fd = new FormData();
-                if (e.target.files?.[0]) fd.append("images", e.target.files[0]);
+                const files = Array.from(e.target.files || []);
                 try {
-                  const r = await api("/uploads", { method: "POST", body: fd });
+                  const r = await uploadImages(files);
                   change("image", r.urls[0]);
                 } catch (err) {
                   toast.error(message(err));
