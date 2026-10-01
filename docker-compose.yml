@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: nest
+      POSTGRES_USER: nest
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U nest -d nest']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  web:
+    build: .
+    ports: ['5000:5000']
+    environment:
+      DB_MODE: postgres
+      DATABASE_URL: postgresql://nest:${POSTGRES_PASSWORD}@postgres:5432/nest
+      JWT_SECRET: ${JWT_SECRET:?Set a secure JWT_SECRET in .env}
+      FRONTEND_URL: http://localhost:5000
+      PUBLIC_URL: http://localhost:5000
+      COOKIE_SECURE: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/backend/uploads
+volumes:
+  postgres_data:
+  uploads:
